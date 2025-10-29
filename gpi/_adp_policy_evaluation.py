@@ -15,10 +15,15 @@ class _ClosedFormLinearEvaluator:
 
         P_pi = np.zeros((S, S))
         for i, s in enumerate(states):
-            # terminal rows remain zeros
-            # if action is unknown in model, keep zeros row
-            a = policy(s) if len(actions) > 0 else None
-            if a is None or a not in actions:
+            # do NOT query the policy in terminal states (or when no actions are modeled)
+            if mdp_hat.is_terminal_state(s) or len(actions) == 0:
+                continue
+            # be defensive: if the policy is undefined for this state, skip
+            try:
+                a = policy(s)
+            except Exception:
+                continue
+            if a not in actions:
                 continue
             j = actions.index(a)
             P_pi[i, :] = mdp_hat.prob_matrix[i, j, :]
