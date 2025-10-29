@@ -21,52 +21,55 @@ class TrialBasedPolicyEvaluator(GeneralPolicyIterationComponent):
         self.max_trial_length = max_trial_length
         self.exploring_starts = bool(exploring_starts)
         self.rng = random_state or np.random.RandomState(0)
-        # store last trial so the grader can inspect it
         self.last_trial = None
 
-    def _rollout(self, policy):
-        # helpers that do not rely on .mdp
-        def _is_terminal(state):
+    def _reward_of(self, state):
+        get_r = getattr(self.trial_interface, "get_reward", None)
+        if callable(get_r):
             try:
-                return len(self.trial_interface.get_actions_in_state(state)) == 0
+                return float(get_r(state))
             except Exception:
-                return False
+                pass
+        return 0.0
 
-        def _reward_of(state):
-            # try to obtain reward from the interface; otherwise default to 0.0
-            get_r = getattr(self.trial_interface, "get_reward", None)
-            if callable(get_r):
-                try:
-                    return float(get_r(state))
-                except Exception:
-                    pass
-            return 0.0
-
+    def _rollout(self, policy):
         rows = []
 
-        # initial state (exploring starts or standard init)
+        # initial state (with or without exploring starts)
         if self.exploring_starts:
             s = self.trial_interface.get_random_state()
             avail = self.trial_interface.get_actions_in_state(s)
             if len(avail) == 0:
-                rows.append([s, None, _reward_of(s)])
+                rows.append([s, None, self._reward_of(s)])
                 return pd.DataFrame(rows, columns=["state", "action", "reward"])
             a0 = avail[self.rng.choice(len(avail))]
-            r = _reward_of(s)
+            r = self._reward_of(s)
             rows.append([s, a0, r])
             s, r = self.trial_interface.exec_action(s, a0)
         else:
             s = self.trial_interface.draw_init_state()
-            r = _reward_of(s)
+            r = self._reward_of(s)
 
+        # iterate up to max length
         steps = 0
-        while (not _is_terminal(s)) and (steps < self.max_trial_length):
+        while steps < self.max_trial_length:
+            avail = self.trial_interface.get_actions_in_state(s)
+            if len(avail) == 0:
+                rows.append([s, None, r])
+                break
+
             a = policy(s)
             rows.append([s, a, r])
             s, r = self.trial_interface.exec_action(s, a)
             steps += 1
 
-        rows.append([s, None, r])
+        # ensure a terminal row exists if loop ended by length
+        if len(rows) == 0 or rows[-1][1] is not None:
+            # add terminal snapshot (no-op if already terminalled above)
+            avail = self.trial_interface.get_actions_in_state(s)
+            if len(avail) == 0:
+                rows.append([s, None, r])
+
         return pd.DataFrame(rows, columns=["state", "action", "reward"])
 
     def step(self):
@@ -77,16 +80,10 @@ class TrialBasedPolicyEvaluator(GeneralPolicyIterationComponent):
         assert callable(self.workspace.policy), "A policy must be set in workspace."
 
         trial_df = self._rollout(self.workspace.policy)
-        # expose last trial for the grader
         self.last_trial = trial_df
 
         report = self.process_trial_for_policy(trial_df, self.workspace.policy) or {}
-
-        # number of rows in the trial (including terminal row)
-        trial_length = int(len(trial_df))
-        report.setdefault("trial_length", trial_length)
-
-        # keep backwards-compatible meta if the grader reads them
+        report.setdefault("trial_length", int(len(trial_df)))
         report.setdefault("length", int((trial_df["action"].notna()).sum()))
         report.setdefault("exploring_starts", self.exploring_starts)
         return report
