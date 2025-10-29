@@ -1,7 +1,7 @@
 import numpy as np
-
 from mdp._trial_interface import TrialInterface
 from _trial_based_policy_evaluator import TrialBasedPolicyEvaluator
+
 
 class FirstVisitMonteCarloEvaluator(TrialBasedPolicyEvaluator):
 
@@ -20,52 +20,67 @@ class FirstVisitMonteCarloEvaluator(TrialBasedPolicyEvaluator):
             max_trial_length=max_trial_length,
             random_state=random_state
         )
-        # contadores para promedio incremental
-        self._counts = {}   # dict[s][a] -> int
+        # first-visit counts per (s,a)
+        self._visit_counts = {}
+        # keep a running set of seen states to define v over them
+        self._seen_states = set()
 
-    def _ensure_slots(self, s, a):
+    def _ensure_q(self, s, a):
         if self.workspace.q is None:
             self.workspace.replace_q({})
         if s not in self.workspace.q:
             self.workspace.q[s] = {}
         if a not in self.workspace.q[s]:
             self.workspace.q[s][a] = 0.0
-        if s not in self._counts:
-            self._counts[s] = {}
-        if a not in self._counts[s]:
-            self._counts[s][a] = 0
+        if s not in self._visit_counts:
+            self._visit_counts[s] = {}
+        if a not in self._visit_counts[s]:
+            self._visit_counts[s][a] = 0
 
-    def _sync_v_from_q(self):
+    def _is_terminal(self, s):
+        try:
+            return len(self.trial_interface.get_actions_in_state(s)) == 0
+        except Exception:
+            return False
+
+    def _reward_of(self, s):
+        get_r = getattr(self.trial_interface, "get_reward", None)
+        if callable(get_r):
+            try:
+                return float(get_r(s))
+            except Exception:
+                pass
+        return 0.0
+
+    def _update_v_from_q(self):
+        # v(s) = q(s, pi(s)) for deterministic policy; define only for seen states
         pi = self.workspace.policy
-        mdp = self.trial_interface.mdp
         v = {}
-        for s in mdp.states:
-            if mdp.is_terminal_state(s):
-                v[s] = mdp.get_reward(s)
-            else:
-                a = pi(s)
-                v[s] = self.workspace.q.get(s, {}).get(a, 0.0)
+        for s in self._seen_states:
+            if self._is_terminal(s):
+                v[s] = self._reward_of(s)
+                continue
+            a = pi(s)
+            v[s] = self.workspace.q.get(s, {}).get(a, 0.0)
         self.workspace.replace_v(v)
 
     def process_trial_for_policy(self, df_trial, policy):
-        """
-
-        :param df_trial: dataframe with the trial (three columns with states, actions, and the rewards)
-        :param policy: the policy that was used to create the trial
-        :return: a dictionary with a report of the step
-        """
         states = df_trial["state"].tolist()
         actions = df_trial["action"].tolist()
         rewards = df_trial["reward"].tolist()
 
-        # Retornos descontados hacia atrás
+        # remember all states touched in this trial
+        for s in states:
+            self._seen_states.add(s)
+
+        # returns-from-right
         G = 0.0
-        ret = [0.0] * len(rewards)
+        returns_from = [0.0] * len(rewards)
         for i in range(len(rewards) - 1, -1, -1):
             G = rewards[i] + self.gamma * G
-            ret[i] = G
+            returns_from[i] = G
 
-        # First-Visit: solo la primera ocurrencia de (s,a) en el trial
+        # first-visit update
         seen = set()
         updates = 0
         for t, (s, a) in enumerate(zip(states, actions)):
@@ -76,15 +91,15 @@ class FirstVisitMonteCarloEvaluator(TrialBasedPolicyEvaluator):
                 continue
             seen.add(key)
 
-            # La acción afecta desde s_{t+1} en adelante:
-            target = ret[t + 1] if (t + 1) < len(ret) else 0.0
+            # use return from the NEXT index (effect of (s,a) impacts next state onward)
+            target = returns_from[t + 1] if (t + 1) < len(returns_from) else 0.0
 
-            self._ensure_slots(s, a)
-            self._counts[s][a] += 1
-            n = float(self._counts[s][a])
+            self._ensure_q(s, a)
+            self._visit_counts[s][a] += 1
+            n = self._visit_counts[s][a]
             old = self.workspace.q[s][a]
-            self.workspace.q[s][a] = old + (target - old) / n
+            self.workspace.q[s][a] = old + (target - old) / float(n)
             updates += 1
 
-        self._sync_v_from_q()
+        self._update_v_from_q()
         return {"updated_pairs": updates}

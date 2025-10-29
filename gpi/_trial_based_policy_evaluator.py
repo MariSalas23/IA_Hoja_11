@@ -16,61 +16,71 @@ class TrialBasedPolicyEvaluator(GeneralPolicyIterationComponent):
         ):
         super().__init__()
         self.trial_interface = trial_interface
-        self.gamma = gamma
+        self.gamma = float(gamma)
         self.max_trial_length = max_trial_length
-        self.exploring_starts = exploring_starts
-        self.random_state = random_state
-    
-    def step(self):
-        """
-            creates and processes a trial to update state-values and q-values
-        """
-        assert self.workspace is not None, "Workspace not set"
-        assert callable(self.workspace.policy), "Workspace must hold a policy callable"
+        self.exploring_starts = bool(exploring_starts)
+        self.rng = random_state or np.random.RandomState(0)
 
-        # Generar un trial en DataFrame con columnas ["state","action","reward"]
-        mdp = self.trial_interface.mdp
-        rs = self.random_state or np.random.RandomState(0)
+    def _rollout(self, policy):
+        # helpers that do not rely on .mdp
+        def _is_terminal(state):
+            try:
+                return len(self.trial_interface.get_actions_in_state(state)) == 0
+            except Exception:
+                return False
+
+        def _reward_of(state):
+            # try to obtain reward from the interface; otherwise default to 0.0
+            get_r = getattr(self.trial_interface, "get_reward", None)
+            if callable(get_r):
+                try:
+                    return float(get_r(state))
+                except Exception:
+                    pass
+            return 0.0
+
         rows = []
 
-        # Inicialización: ES o init_states
+        # initial state (exploring starts or standard init)
         if self.exploring_starts:
-            s, r = self.trial_interface.get_random_state()   # esta interfaz retorna (s, r)
-            # acción aleatoria solo en el primer paso
-            acts = self.trial_interface.get_actions_in_state(s)
-            if len(acts) == 0:
-                rows.append([s, None, r])
-                trial = pd.DataFrame(rows, columns=["state","action","reward"])
-                report = self.process_trial_for_policy(trial, self.workspace.policy)
-                length = int((trial["action"].notna()).sum())
-                rep = dict(report or {})
-                rep.setdefault("length", length)
-                rep.setdefault("exploring_starts", True)
-                return rep
-            a0 = acts[rs.choice(len(acts))]
+            s = self.trial_interface.get_random_state()
+            avail = self.trial_interface.get_actions_in_state(s)
+            if len(avail) == 0:
+                rows.append([s, None, _reward_of(s)])
+                return pd.DataFrame(rows, columns=["state", "action", "reward"])
+            a0 = avail[self.rng.choice(len(avail))]
+            r = _reward_of(s)
             rows.append([s, a0, r])
             s, r = self.trial_interface.exec_action(s, a0)
         else:
-            s, r = self.trial_interface.draw_init_state()     # esta interfaz retorna (s, r)
+            s = self.trial_interface.draw_init_state()
+            r = _reward_of(s)
 
         steps = 0
-        while (not mdp.is_terminal_state(s)) and (steps < self.max_trial_length):
-            a = self.workspace.policy(s)
+        while (not _is_terminal(s)) and (steps < self.max_trial_length):
+            a = policy(s)
             rows.append([s, a, r])
             s, r = self.trial_interface.exec_action(s, a)
             steps += 1
 
-        # Estado terminal sin acción
         rows.append([s, None, r])
+        return pd.DataFrame(rows, columns=["state", "action", "reward"])
 
-        trial = pd.DataFrame(rows, columns=["state","action","reward"])
-        report = self.process_trial_for_policy(trial, self.workspace.policy)
-        length = int((trial["action"].notna()).sum())
-        rep = dict(report or {})
-        rep.setdefault("length", length)
-        rep.setdefault("exploring_starts", self.exploring_starts)
-        return rep
-    
+    def step(self):
+        """
+            creates and processes a trial to update state-values and q-values
+        """
+        assert self.workspace is not None, "Workspace not set."
+        assert callable(self.workspace.policy), "A policy must be set in workspace."
+
+        trial_df = self._rollout(self.workspace.policy)
+        report = self.process_trial_for_policy(trial_df, self.workspace.policy) or {}
+
+        length = int((trial_df["action"].notna()).sum())
+        report.setdefault("length", length)
+        report.setdefault("exploring_starts", self.exploring_starts)
+        return report
+
     @abstractmethod
     def process_trial_for_policy(self, trial, policy):
         raise NotImplementedError
