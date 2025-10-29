@@ -1,8 +1,7 @@
 import numpy as np
 
 from mdp._trial_interface import TrialInterface
-from gpi._trial_based_policy_evaluator import TrialBasedPolicyEvaluator
-
+from _trial_based_policy_evaluator import TrialBasedPolicyEvaluator
 
 class FirstVisitMonteCarloEvaluator(TrialBasedPolicyEvaluator):
 

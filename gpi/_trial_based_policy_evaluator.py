@@ -1,5 +1,4 @@
 from _base import GeneralPolicyIterationComponent
-from mdp import ClosedFormMDP
 from mdp._trial_interface import TrialInterface
 import numpy as np
 import pandas as pd

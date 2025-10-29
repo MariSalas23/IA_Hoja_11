@@ -1,8 +1,7 @@
 from mdp._trial_interface import TrialInterface
 import numpy as np
 
-from policy_evaluation._linear import LinearSystemEvaluator
-from gpi._trial_based_policy_evaluator import TrialBasedPolicyEvaluator
+from _trial_based_policy_evaluator import TrialBasedPolicyEvaluator
 from mdp._base import ClosedFormMDP
 
 class ADPPolicyEvaluation(TrialBasedPolicyEvaluator):

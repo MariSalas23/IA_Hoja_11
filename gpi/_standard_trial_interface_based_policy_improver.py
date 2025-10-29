@@ -1,4 +1,4 @@
-from ._base import GeneralPolicyIterationComponent
+from _base import GeneralPolicyIterationComponent
 from mdp._trial_interface import TrialInterface
 import numpy as np
 
