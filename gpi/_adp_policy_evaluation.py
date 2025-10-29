@@ -4,7 +4,6 @@ import numpy as np
 from _trial_based_policy_evaluator import TrialBasedPolicyEvaluator
 from mdp._base import ClosedFormMDP
 
-
 class _ClosedFormLinearEvaluator:
     def evaluate(self, mdp_hat: ClosedFormMDP, gamma: float, policy):
         states = mdp_hat.states
@@ -78,7 +77,7 @@ class ADPPolicyEvaluation(TrialBasedPolicyEvaluator):
         self.action_vector = None
         self.prob_matrix = None
         self.rewards_vector = None
-        self.rewards = None  # NUEVO: lista de recompensas alineada a state_vector
+        self.rewards = None
 
     def _touch_reward(self, s, r):
         if s not in self._r_sum:
@@ -165,14 +164,11 @@ class ADPPolicyEvaluation(TrialBasedPolicyEvaluator):
                 self.workspace.q[s].update(amap)
 
     def _publish_closed_form(self, mdp_hat):
-        # expone los atributos que el test consulta
         self.state_vector = list(mdp_hat.states)
         self.action_vector = list(mdp_hat.actions)
         self.prob_matrix = mdp_hat.prob_matrix
         self.rewards_vector = mdp_hat.rewards
-        # requerido por el test: lista python con recompensas (mismo orden de state_vector)
-        self.rewards = [float(x) for x in mdp_hat.rewards.tolist() if hasattr(mdp_hat.rewards, "tolist")] \
-            if hasattr(mdp_hat.rewards, "tolist") else [float(x) for x in mdp_hat.rewards]
+        self.rewards = [float(x) for x in np.array(mdp_hat.rewards).tolist()]
 
     def process_trial_for_policy(self, df_trial, policy):
         st = df_trial["state"].tolist()
@@ -196,7 +192,6 @@ class ADPPolicyEvaluation(TrialBasedPolicyEvaluator):
         recomputed = False
         if (self._steps_total % self.update_every == 0) or (self.workspace.q is None):
             mdp_hat = self._update_model_from_counts()
-            # publicar el modelo cerrado antes de evaluar la política
             self._publish_closed_form(mdp_hat)
             v_vec = self._policy_evaluation_closed_form(mdp_hat, policy)
             self._push_vq_to_workspace(mdp_hat, v_vec)
@@ -207,3 +202,10 @@ class ADPPolicyEvaluation(TrialBasedPolicyEvaluator):
             "recomputed_model": recomputed,
             "steps_total": self._steps_total
         }
+
+    def get_believed_probs(self):
+        """
+        Returns the most recently estimated transition probability matrix.
+        Shape: (len(state_vector), len(action_vector), len(state_vector))
+        """
+        return self.prob_matrix
