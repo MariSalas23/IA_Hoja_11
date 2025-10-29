@@ -20,10 +20,10 @@ class FirstVisitMonteCarloEvaluator(TrialBasedPolicyEvaluator):
             max_trial_length=max_trial_length,
             random_state=random_state
         )
-        # first-visit counts per (s,a)
         self._visit_counts = {}
-        # keep a running set of seen states to define v over them
         self._seen_states = set()
+        # cumulative first-visit counts across trials (as requested by tests 1.7)
+        self.counts = {}
 
     def _ensure_q(self, s, a):
         if self.workspace.q is None:
@@ -36,6 +36,8 @@ class FirstVisitMonteCarloEvaluator(TrialBasedPolicyEvaluator):
             self._visit_counts[s] = {}
         if a not in self._visit_counts[s]:
             self._visit_counts[s][a] = 0
+        if (s, a) not in self.counts:
+            self.counts[(s, a)] = 0
 
     def _is_terminal(self, s):
         try:
@@ -53,7 +55,6 @@ class FirstVisitMonteCarloEvaluator(TrialBasedPolicyEvaluator):
         return 0.0
 
     def _update_v_from_q(self):
-        # v(s) = q(s, pi(s)) for deterministic policy; define only for seen states
         pi = self.workspace.policy
         v = {}
         for s in self._seen_states:
@@ -69,18 +70,16 @@ class FirstVisitMonteCarloEvaluator(TrialBasedPolicyEvaluator):
         actions = df_trial["action"].tolist()
         rewards = df_trial["reward"].tolist()
 
-        # remember all states touched in this trial
         for s in states:
             self._seen_states.add(s)
 
-        # returns-from-right
+        # returns-from-right (plain sum of rewards from i to end)
         G = 0.0
         returns_from = [0.0] * len(rewards)
         for i in range(len(rewards) - 1, -1, -1):
             G = rewards[i] + self.gamma * G
             returns_from[i] = G
 
-        # first-visit update
         seen = set()
         updates = 0
         for t, (s, a) in enumerate(zip(states, actions)):
@@ -91,11 +90,16 @@ class FirstVisitMonteCarloEvaluator(TrialBasedPolicyEvaluator):
                 continue
             seen.add(key)
 
-            # use return from the NEXT index (effect of (s,a) impacts next state onward)
-            target = returns_from[t + 1] if (t + 1) < len(returns_from) else 0.0
+            # q(s,a) target consistent with DF: r(s) + gamma * return from next step
+            future = returns_from[t + 1] if (t + 1) < len(returns_from) else 0.0
+            target = rewards[t] + self.gamma * future
 
             self._ensure_q(s, a)
+            # first-visit per-trial counter
             self._visit_counts[s][a] += 1
+            # global cumulative first-visit counter
+            self.counts[(s, a)] += 1
+
             n = self._visit_counts[s][a]
             old = self.workspace.q[s][a]
             self.workspace.q[s][a] = old + (target - old) / float(n)

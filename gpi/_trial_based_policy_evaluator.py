@@ -23,6 +23,21 @@ class TrialBasedPolicyEvaluator(GeneralPolicyIterationComponent):
         self.rng = random_state or np.random.RandomState(0)
         self.last_trial = None
 
+    def _only_state(self, x):
+        # supports x being either state or (state, reward)
+        if isinstance(x, (tuple, list)) and len(x) >= 1:
+            return x[0]
+        return x
+
+    def _maybe_reward(self, x):
+        # returns reward if x is (state, reward); else None
+        if isinstance(x, (tuple, list)) and len(x) >= 2:
+            try:
+                return float(x[1])
+            except Exception:
+                return None
+        return None
+
     def _reward_of(self, state):
         get_r = getattr(self.trial_interface, "get_reward", None)
         if callable(get_r):
@@ -37,18 +52,24 @@ class TrialBasedPolicyEvaluator(GeneralPolicyIterationComponent):
 
         # initial state (with or without exploring starts)
         if self.exploring_starts:
-            s = self.trial_interface.get_random_state()
+            ret = self.trial_interface.get_random_state()
+            s = self._only_state(ret)
+            r0 = self._maybe_reward(ret)
+            if r0 is None:
+                r0 = self._reward_of(s)
             avail = self.trial_interface.get_actions_in_state(s)
             if len(avail) == 0:
-                rows.append([s, None, self._reward_of(s)])
+                rows.append([s, None, r0])
                 return pd.DataFrame(rows, columns=["state", "action", "reward"])
             a0 = avail[self.rng.choice(len(avail))]
-            r = self._reward_of(s)
-            rows.append([s, a0, r])
+            rows.append([s, a0, r0])
             s, r = self.trial_interface.exec_action(s, a0)
         else:
-            s = self.trial_interface.draw_init_state()
-            r = self._reward_of(s)
+            ret = self.trial_interface.draw_init_state()
+            s = self._only_state(ret)
+            r = self._maybe_reward(ret)
+            if r is None:
+                r = self._reward_of(s)
 
         # iterate up to max length
         steps = 0
@@ -65,7 +86,6 @@ class TrialBasedPolicyEvaluator(GeneralPolicyIterationComponent):
 
         # ensure a terminal row exists if loop ended by length
         if len(rows) == 0 or rows[-1][1] is not None:
-            # add terminal snapshot (no-op if already terminalled above)
             avail = self.trial_interface.get_actions_in_state(s)
             if len(avail) == 0:
                 rows.append([s, None, r])

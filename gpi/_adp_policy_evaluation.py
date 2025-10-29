@@ -33,7 +33,7 @@ class ADPPolicyEvaluation(TrialBasedPolicyEvaluator):
         self._r_cnt = {}           # s -> int
         self._steps_total = 0
 
-        # keep stable insertion order of observed states and actions
+        # stable order for states and observed actions
         self._state_order = []
         self._action_set = set()
 
@@ -61,7 +61,6 @@ class ADPPolicyEvaluation(TrialBasedPolicyEvaluator):
         self._counts[s][a][sp] += 1
 
     def _states_list(self):
-        # prefer insertion order; fall back to keys union if empty
         if self._state_order:
             return list(self._state_order)
         keys = set(self._r_sum.keys())
@@ -75,18 +74,16 @@ class ADPPolicyEvaluation(TrialBasedPolicyEvaluator):
     def _actions_list(self):
         if self._action_set:
             return sorted(list(self._action_set), key=lambda x: str(x))
-        # if no actions seen yet, attempt to probe from interface by sampling
-        # (kept minimal; tests usually accumulate transitions before building model)
         return []
 
     def _update_model_from_counts(self):
         states = self._states_list()
         actions = self._actions_list()
-        S, A = len(states), len(actions) if actions else (len(states), 0)
+        S = len(states)
+        A = len(actions)
 
         if A == 0:
-            # no actions observed yet -> degenerate model with zeros
-            P = np.zeros((S, 1 if S == 0 else 1, S))
+            P = np.zeros((S, 1 if S > 0 else 1, S))
         else:
             P = np.zeros((S, A, S))
         r = np.zeros(S, dtype=float)
@@ -116,10 +113,8 @@ class ADPPolicyEvaluation(TrialBasedPolicyEvaluator):
         actions = mdp_hat.actions
         S = len(states)
 
-        # build P_pi
         P_pi = np.zeros((S, S))
         for i, s in enumerate(states):
-            # if terminal (no actions in interface), leave zeros row
             try:
                 avail = self.trial_interface.get_actions_in_state(s)
             except Exception:
@@ -130,7 +125,6 @@ class ADPPolicyEvaluation(TrialBasedPolicyEvaluator):
                 continue
             a = policy(s)
             if a not in actions:
-                # if action not in model yet, skip (row stays zeros)
                 continue
             j = actions.index(a)
             P_pi[i, :] = mdp_hat.prob_matrix[i, j, :]
@@ -150,11 +144,8 @@ class ADPPolicyEvaluation(TrialBasedPolicyEvaluator):
         return v
 
     def _push_vq_to_workspace(self, mdp_hat, v_vec):
-        # v as dict over observed states
         v_dict = {s: float(v_vec[idx]) for idx, s in enumerate(mdp_hat.states)}
         self.workspace.replace_v(v_dict)
-
-        # q(s,a) from v and model (only for actions known in the model)
         q_dict = mdp_hat.get_q_values_from_v_values(v_vec, self.gamma)
         if self.workspace.q is None:
             self.workspace.replace_q(q_dict)
